@@ -104,6 +104,7 @@ from sklearn.metrics import precision_score, balanced_accuracy_score, recall_sco
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+
 def load_data(csv_file):
     df = pd.read_csv(csv_file, compression="zip")
     return df
@@ -173,12 +174,13 @@ def save_model(estimator, path):
 def check_estimator(estimator, x, y, dataset):
     y_pred = estimator.predict(x)
     
-    precision = round(precision_score(y, y_pred), 4)
-    balanced_accuracy = round(balanced_accuracy_score(y, y_pred), 4)
-    f1 = round(f1_score(y, y_pred), 4)
-    recall = round(recall_score(y, y_pred), 4)
+    precision = float(precision_score(y, y_pred))
+    balanced_accuracy = float(balanced_accuracy_score(y, y_pred))
+    f1 = float(f1_score(y, y_pred))
+    recall = float(recall_score(y, y_pred))
     
     metrics = {
+        "type": "metrics",
         "dataset": dataset,
         "precision": precision,
         "balanced_accuracy": balanced_accuracy,
