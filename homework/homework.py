@@ -1,15 +1,3 @@
-import os
-import gzip
-import json
-import pickle
-import pandas as pd
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.model_selection import GridSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import precision_score, balanced_accuracy_score, recall_score, f1_score, confusion_matrix
-
 # flake8: noqa: E501
 #
 # En este dataset se desea pronosticar el default (pago) del cliente el próximo
@@ -104,6 +92,23 @@ from sklearn.metrics import precision_score, balanced_accuracy_score, recall_sco
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+import os
+import gzip
+import json
+import pickle
+import pandas as pd
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    precision_score,
+    balanced_accuracy_score,
+    recall_score,
+    f1_score,
+    confusion_matrix
+)
 
 def load_data(csv_file):
     df = pd.read_csv(csv_file, compression="zip")
@@ -128,7 +133,7 @@ def split_data(data_train, data_test):
 
 # Paso 3
 def create_pipeline(estimator):
-    categorical_feature = ["EDUCATION", "SEX", "MARRIAGE"]
+    categorical_feature = ["SEX", "EDUCATION", "MARRIAGE"]
     
     preprocessor = ColumnTransformer(
         transformers=[
@@ -151,11 +156,10 @@ def make_grid_search(pipeline):
     grid_search = GridSearchCV(
         estimator=pipeline,
         param_grid={
-            "estimator__n_estimators": [50, 100, 200],
+            "estimator__n_estimators": [100, 200],
             "estimator__max_depth": [None, 10, 20],
-            "estimator__min_samples_split": [10],
-            "estimator__min_samples_leaf": [1, 2, 5],
-            "estimator__max_features": ["sqrt"]
+            "estimator__min_samples_split": [2, 5, 10],
+            "estimator__min_samples_leaf": [1, 2, 4]
         },
         cv=10,
         scoring="balanced_accuracy",
