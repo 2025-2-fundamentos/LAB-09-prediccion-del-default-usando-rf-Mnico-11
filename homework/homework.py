@@ -1,16 +1,14 @@
 import os
-import json
 import gzip
+import json
 import pickle
-import zipfile
 import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import precision_score, balanced_accuracy_score, recall_score, f1_score, confusion_matrix
 
 # flake8: noqa: E501
 #
@@ -58,9 +56,8 @@ from sklearn.metrics import balanced_accuracy_score, precision_score, recall_sco
 # - Elimine los registros con informacion no disponible.
 # - Para la columna EDUCATION, valores > 4 indican niveles superiores
 #   de educación, agrupe estos valores en la categoría "others".
-#
-# Renombre la columna "default payment next month" a "default"
-# y remueva la columna "ID".
+# - Renombre la columna "default payment next month" a "default"
+# - Remueva la columna "ID".
 #
 #
 # Paso 2.
@@ -72,9 +69,7 @@ from sklearn.metrics import balanced_accuracy_score, precision_score, recall_sco
 # contener las siguientes capas:
 # - Transforma las variables categoricas usando el método
 #   one-hot-encoding.
-# - Escala las demas variables al intervalo [0, 1].
-# - Selecciona las K mejores caracteristicas.
-# - Ajusta un modelo de regresion logistica.
+# - Ajusta un modelo de bosques aleatorios (rando forest).
 #
 #
 # Paso 4.
@@ -96,8 +91,8 @@ from sklearn.metrics import balanced_accuracy_score, precision_score, recall_sco
 # Este diccionario tiene un campo para indicar si es el conjunto
 # de entrenamiento o prueba. Por ejemplo:
 #
-# {'type': 'metrics', 'dataset': 'train', 'precision': 0.8, 'balanced_accuracy': 0.7, 'recall': 0.9, 'f1_score': 0.85}
-# {'type': 'metrics', 'dataset': 'test', 'precision': 0.7, 'balanced_accuracy': 0.6, 'recall': 0.8, 'f1_score': 0.75}
+# {'dataset': 'train', 'precision': 0.8, 'balanced_accuracy': 0.7, 'recall': 0.9, 'f1_score': 0.85}
+# {'dataset': 'test', 'precision': 0.7, 'balanced_accuracy': 0.6, 'recall': 0.8, 'f1_score': 0.75}
 #
 #
 # Paso 7.
@@ -110,139 +105,118 @@ from sklearn.metrics import balanced_accuracy_score, precision_score, recall_sco
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
 
-def clean_data(df):
-    df = df.copy()
-    df = df.drop("ID", axis = 1)
-    df = df.rename(columns = {"default payment next month": "default"})
-    df = df.dropna()
-    df = df[(df["EDUCATION"] != 0) & (df["MARRIAGE"] != 0)]
-    df.loc[df["EDUCATION"] > 4, "EDUCATION"] = 4
-
+def load_data(csv_file):
+    df = pd.read_csv(csv_file, compression = "zip")
     return df
 
-def model():
-    categories = ["SEX", "EDUCATION", "MARRIAGE"]
-    numerics = ["LIMIT_BAL", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
-                "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6", 
-                "PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5","PAY_AMT6"]
-    
-    preprocessor = ColumnTransformer(transformers= [
-                    ("cat", OneHotEncoder(handle_unknown = "ignore"), categories),
-                    ("num", MinMaxScaler(), numerics)
-                    ], remainder = "passthrough")
-    
-    selectkbest = SelectKBest(score_func = f_classif)
+#!Paso 1
+def data_clean(data):
+    df = data.copy()
+    df.rename(columns = {"default payment next month": "default"}, inplace = True)
+    df.drop(columns = "ID", inplace = True)
+    df = df[(df["EDUCATION"] != 0) & (df["MARRIAGE"] != 0)]
+    df["EDUCATION"] = df["EDUCATION"].apply(lambda x: 4 if x > 4 else x)
+    return df 
 
-    pipeline = Pipeline(steps = [
-        ("prepocessor", preprocessor),
-        ("selectkbest", selectkbest),
-        ("classifier", LogisticRegression(max_iter = 1000, solver = "saga", random_state = 42))])
+#!Paso 2
+def split_data(data_train, data_test):
+    x_train = data_train.drop(columns = "default")
+    y_train = data_train["default"]
+    x_test = data_test.drop(columns = "default")
+    y_test = data_test["default"]
+    return x_train, y_train, x_test, y_test
+
+#!Paso 3
+def create_pipeline(estimator):
+    categorical_feature = ["EDUCATION", "SEX", "MARRIAGE"]
+
+    preprocessor = ColumnTransformer(trasnformer = [
+        ("cat", OneHotEncoder(handle_unknown = "ignore"), categorical_feature)
+        ], remainder = "passthrough")
+
+    pipeline = Pipeline(steps =[("preprocessor", preprocessor),
+                                ("estimator", estimator)],
+                                verbose = False
+                                )
     return pipeline
 
-def hyperparameters(model, n_splits, x_train, y_train, scoring):
-    estimator = GridSearchCV(
-        estimator = model,
-        param_grid = {
-                    "selectkbest__k": range(1, 11),
-                    "classifier__penalty": ["11", "12"],
-                    "classifier__C": [0.001, 0.01, 0.1, 1, 10, 100]
-                    },
-                    cv = n_splits,
-                    refit = True,
-                    verbose = 0,
-                    return_train_score = False,
-                    scoring = scoring
-                    )
-    estimator.fit(x_train, y_train)
+#!Paso 4
+def make_grid_search(pipeline):
+    grid_search = GridSearchCV(estimator = pipeline,
+                                param_grid = {
+                                "estimator_n_estimators":[50, 100, 200],
+                                'estimator_max_depth': [None, 10, 20],  
+                                'estimator_min_samples_split': [10],  
+                                'estimator_min_samples_leaf': [1, 2, 5],  
+                                'estimator_max_features': ['sqrt']
+                            },
+                            cv  = 10,
+                            scoring = "balanced_accuaracy",
+                            n_jobs = -1,
+                            verbose = 2)
+    return grid_search
 
-    return estimator
+#!Paso 5
+def save_model(estimator, path):
+    os.makedirs(os.path.dirname(path), exist_ok = True)
+    with gzip.open(path, "wb") as f:
+        pickle.dump(estimator, f)
 
-def metrics(model, x_train, y_train, x_test, y_test):
-    y_train_pred = model.predict(x_train)
-    y_test_pred = model.predict(x_test)
+#!Paso 6
+def check_estimator(estimator, x, y, dataset):
+    y_pred = estimator.predict(x)
 
-    train_metrics = {
-                    "type": "metrics",
-                    "dataset": "train",
-                    "precision": (precision_score(y_train, y_train_pred, average = "binary")),
-                    "balanced_accuracy": (balanced_accuracy_score(y_train, y_train_pred)),
-                    "recall": (recall_score(y_train, y_train_pred, average = "binary" )),
-                    "f1_score": (f1_score(y_train, y_train_pred, average = "binary"))
-                    }
-    
-    test_metrics = {
-                    "type": "metrics",
-                    "dataset": "test",
-                    "precision": (precision_score(y_test, y_test_pred, average = "binary")),
-                    "balanced_accuracy": (balanced_accuracy_score(y_test, y_test_pred)),
-                    "recall": (recall_score(y_test, y_test_pred, average = "binary")),
-                    "f1_score": (f1_score(y_test, y_test_pred, average = "binary"))
-                    }
-    return train_metrics, test_metrics
+    precision = round(precision_score(y, y_pred), 4)
+    balanced_accuracy = round(balanced_accuracy_score(y, y_pred), 4)
+    f1 = round(f1_score(y, y_pred), 4)
+    recall = round(recall_score(y, y_pred), 4)
 
-def matrix(model, x_train, y_train, x_test, y_test):
-    y_train_pred = model.predict(x_train)
-    y_test_pred = model.predict(x_test)
+    metrics = {
+        "type":"metrics",
+        "dataset":dataset,
+        "precision":precision,
+        "balanced_accuracy":balanced_accuracy,
+        "recall":recall,
+        "f1_score":f1
+    }
+    return metrics, y_pred, y
 
-    cm_train = confusion_matrix(y_train, y_train_pred)
-    tn_train, fp_train, fn_train, tp_train = cm_train.ravel()
+#!Paso 7
+def c_matrix(y_true, y_pred, dataset):
+    cm = confusion_matrix(y_true, y_pred)
+    return{
+        "type" : "cm_matrix", "dataset": dataset,
+        "true_0" : {"predicted_0" : int(cm[0, 0]), "predicted_1" : int(cm[0, 1])},
+        "true_1" : {"predicted_0" : int(cm[1, 0]), "predicted_1" : int(cm[1, 1])}
+    }
 
-    cm_test =  confusion_matrix(y_test, y_test_pred)
-    tn_test, fp_test, fn_test, tp_test = cm_test.ravel()
-
-    train_matrix = {"type": "cm_matrix",
-                    "dataset": "train",
-                    "true_0":  {"predicted_0": int(tn_train),
-                                "predicted_1": int(fp_train)},
-                    "true_1":  {"predicted_0": int(fn_train),
-                                "predicted_1": int(tp_train)}
-                    }
-    test_matrix =  {"type": "cm_matrix",
-                    "dataset": "test",
-                    "true_0":  {"predicted_0": int(tn_test),
-                                "predicted_1": int(fp_test)},
-                    "true_1":  {"predicted_0": int(fn_test),
-                                "predicted_1": int(tp_test)}
-                    }
-    return train_matrix, test_matrix
-
-def save_model(model):
-    os.makedirs("files/models", exist_ok = True)
-
-    with gzip.open("files/models/model.pkl.gz", "wb") as f:
-        pickle.dump(model, f)
-
-def save_matrics(metrics):
+def main():
     os.makedirs("files/output", exist_ok = True)
 
-    with open("files/output/metrics.json", "w") as f:
-        for metric in metrics:
-            json_line = json.dump(metric)
-            f.write(json_line + "\n")
+    df_train = data_clean(load_data("files/input/train_data.csv.zip"))
+    df_test = data_clean(load_data("files/input/test_data.csv.zip"))
 
+    x_train, y_train, x_test, y_test = split_data(df_train, df_test)
 
-file_Test = "files/input/test_data.csv.zip"
-file_Train = "files/input/train_data.csv.zip"
+    pipeline = create_pipeline(RandomForestClassifier())
 
-with zipfile.ZipFile(file_Test, "r") as zip:
-    with zip.open("test_default_of_credit_card_clients.csv") as f:
-        df_Test = pd.read_csv(f)
+    grid_search = make_grid_search(pipeline)
 
-with zipfile.ZipFile(file_Train, "r") as zip:
-    with zip.open("train_deafult_of_credit_card_clients.csv") as f:
-        df_Train = pd.read_csv(f)
+    estimator = grid_search.fit(x_train, y_train)
 
-df_Test = clean_data(df_Test)
-df_Train = clean_data(df_Train)
+    metrics_train, y_pred_train, y_train = check_estimator (estimator, x_train, y_train, "train")
+    metrics_test, y_pred_test, y_test = check_estimator(estimator, x_test, y_test, "test")
 
-x_train, y_train = df_Train.drop("default", axis = 1), df_Train["default"]
-x_test, y_test = df_Test.drop("default", axis = 1), df_Test["default"]
+    c_train = c_matrix(y_train, y_pred_train, "train")
+    c_test = c_matrix(y_test, y_pred_test, "test")
 
-model_pipeline = model()
-model_pipeline = hyperparameters(model_pipeline, 10, x_train, y_train, "balanced_accuracy")
-save_model(model_pipeline)
+    with open("files/output/metrics.json", "w") as file:
+        file.write(json.dumps(metrics_train) + "\n")  
+        file.write(json.dumps(metrics_test) +  "\n")
+        file.write(json.dumps(c_train) + "\n")
+        file.write(json.dumps(c_test)  + "\n")
 
-train_metrics, test_metrics = metrics(model_pipeline, x_train, y_train, x_test, y_test)
-train_matrix, test_matrix = matrix(model_pipeline, x_train, y_train, x_test, y_test)
+    save_model(estimator, "files/models/model.pkl.gz")
 
-save_matrics([train_metrics, test_metrics, train_matrix, test_matrix])
+if __name__ == "__main__":
+    main()
